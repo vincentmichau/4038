@@ -1,0 +1,205 @@
+# =============================================
+# NIGHT GUARDS SYSTEM - DOCKER COMPOSE UNIFIÉ
+# Version One-Shot - Déploiement Simplifié
+# =============================================
+
+version: '3.8'
+
+services:
+  # Application Node.js
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile-unified
+    container_name: night-guards-app
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - DB_HOST=mysql
+      - DB_USER=${DB_USER:-nightguards}
+      - DB_PASSWORD=${DB_PASSWORD:-secure_password_2024}
+      - DB_NAME=${DB_NAME:-nightguards_db}
+      - JWT_SECRET=${JWT_SECRET:-your-super-secret-jwt-key-2024}
+      - QR_CODE_SECRET=${QR_CODE_SECRET:-your-super-secret-qr-key-2024}
+      - SMTP_HOST=${SMTP_HOST}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USER=${SMTP_USER}
+      - SMTP_PASS=${SMTP_PASS}
+      - EMAIL_FROM=${EMAIL_FROM:-noreply@nightguards.com}
+    volumes:
+      - ./reports:/app/reports
+      - ./uploads:/app/uploads
+      - ./logs:/app/logs
+    depends_on:
+      mysql:
+        condition: service_healthy
+    networks:
+      - night-guards-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Base de données MySQL
+  mysql:
+    image: mysql:8.0
+    container_name: night-guards-mysql
+    restart: unless-stopped
+    environment:
+      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD:-super_root_password_2024}
+      - MYSQL_DATABASE=${DB_NAME:-nightguards_db}
+      - MYSQL_USER=${DB_USER:-nightguards}
+      - MYSQL_PASSWORD=${DB_PASSWORD:-secure_password_2024}
+    ports:
+      - "${DB_PORT:-3306}:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./database/complete-schema.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ./database/my.cnf:/etc/mysql/conf.d/my.cnf:ro
+    networks:
+      - night-guards-network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    command: --default-authentication-plugin=mysql_native_password
+
+  # Redis pour le cache et les sessions
+  redis:
+    image: redis:7-alpine
+    container_name: night-guards-redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+      - ./config/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    networks:
+      - night-guards-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    command: redis-server /usr/local/etc/redis/redis.conf
+
+  # Nginx Reverse Proxy
+  nginx:
+    image: nginx:alpine
+    container_name: night-guards-nginx
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    volumes:
+      - ./config/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./config/ssl:/etc/nginx/ssl:ro
+      - ./reports:/var/www/reports:ro
+    depends_on:
+      - app
+    networks:
+      - night-guards-network
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Monitoring avec Prometheus
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: night-guards-prometheus
+    restart: unless-stopped
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    networks:
+      - night-guards-network
+
+  # Grafana pour les tableaux de bord
+  grafana:
+    image: grafana/grafana:latest
+    container_name: night-guards-grafana
+    restart: unless-stopped
+    ports:
+      - "${GRAFANA_PORT:-3001}:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin123}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./config/grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - prometheus
+    networks:
+      - night-guards-network
+
+  # Logs avec ELK Stack (optionnel)
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.1
+    container_name: night-guards-elasticsearch
+    restart: unless-stopped
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ports:
+      - "${ELASTICSEARCH_PORT:-9200}:9200"
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+    networks:
+      - night-guards-network
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.11.1
+    container_name: night-guards-kibana
+    restart: unless-stopped
+    ports:
+      - "${KIBANA_PORT:-5601}:5601"
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+    depends_on:
+      - elasticsearch
+    networks:
+      - night-guards-network
+
+# =============================================
+# VOLUMES
+# =============================================
+volumes:
+  mysql_data:
+    driver: local
+  redis_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+  elasticsearch_data:
+    driver: local
+
+# =============================================
+# RÉSEAUX
+# =============================================
+networks:
+  night-guards-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

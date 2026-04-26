@@ -1,0 +1,115 @@
+# =============================================
+# NIGHT GUARDS SYSTEM - DOCKERFILE UNIFIÉ
+# Version One-Shot - Déploiement Simplifié
+# =============================================
+
+# Étape 1: Build de l'application
+FROM node:18-alpine AS builder
+
+# Définition des arguments de build
+ARG NODE_ENV=production
+ARG PORT=3000
+
+# Configuration des variables d'environnement
+ENV NODE_ENV=${NODE_ENV}
+ENV PORT=${PORT}
+
+# Installation des dépendances système pour Puppeteer
+RUN apk add --no-cache \
+    chromium \
+    nss \
+    freetype \
+    freetype-dev \
+    harfbuzz \
+    ca-certificates \
+    ttf-freefont
+
+# Configuration de Puppeteer pour utiliser le système Chromium
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
+    PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
+
+# Création du répertoire de travail
+WORKDIR /app
+
+# Copie des fichiers de configuration
+COPY package-unified.json package.json
+COPY package-lock.json* package-lock.json*
+
+# Installation des dépendances
+RUN npm ci --only=production && npm cache clean --force
+
+# Copie du code source
+COPY . .
+
+# Création des répertoires nécessaires
+RUN mkdir -p reports/reporting reports/tickets uploads/tickets uploads/reporting uploads/temp logs
+
+# Permissions sur les répertoires
+RUN chown -R node:node /app
+
+# Étape 2: Image de production
+FROM node:18-alpine AS production
+
+# Configuration des variables d'environnement
+ENV NODE_ENV=production
+ENV PORT=3000
+
+# Installation des dépendances système pour Puppeteer
+RUN apk add --no-cache \
+    chromium \
+    nss \
+    freetype \
+    freetype-dev \
+    harfbuzz \
+    ca-certificates \
+    ttf-freefont \
+    curl \
+    dumb-init
+
+# Configuration de Puppeteer
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
+    PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
+
+# Création de l'utilisateur non-root
+RUN addgroup -g 1001 -S nodejs && \
+    adduser -S nodejs -u 1001
+
+# Création du répertoire de travail
+WORKDIR /app
+
+# Copie des dépendances depuis le builder
+COPY --from=builder --chown=nodejs:nodejs /app/node_modules ./node_modules
+COPY --from=builder --chown=nodejs:nodejs /app/package.json ./package.json
+
+# Copie du code source
+COPY --chown=nodejs:nodejs . .
+
+# Création des répertoires de données
+RUN mkdir -p reports/reporting reports/tickets uploads/tickets uploads/reporting uploads/temp logs && \
+    chown -R nodejs:nodejs /app
+
+# Changement d'utilisateur
+USER nodejs
+
+# Exposition du port
+EXPOSE 3000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD curl -f http://localhost:3000/health || exit 1
+
+# Point d'entrée avec dumb-init pour une gestion correcte des signaux
+ENTRYPOINT ["dumb-init", "--"]
+CMD ["node", "app-unified.js"]
+
+# =============================================
+# Étiquettes pour l'organisation
+# =============================================
+LABEL maintainer="Night Guards Team" \
+      version="2.0.0" \
+      description="Night Guards System - Version Unifiée" \
+      org.opencontainers.image.title="Night Guards Unified" \
+      org.opencontainers.image.description="Système de sécurité unifié avec rapports et tickets" \
+      org.opencontainers.image.version="2.0.0" \
+      org.opencontainers.image.vendor="Night Guards" \
+      org.opencontainers.image.licenses="MIT"
